@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2025 音樂劇互動網絡系統 v3</title>
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --sidebar-bg: #1e293b;
+            --text-main: #ffffff;
+            --text-dim: #94a3b8;
+            --accent-work: #38bdf8;
+            --accent-person: #4ade80;
+        }
+        body, html { margin: 0; padding: 0; height: 100%; background: var(--bg-color); color: var(--text-main); font-family: sans-serif; overflow: hidden; display: flex; }
+        
+        #sidebar { width: 380px; background: var(--sidebar-bg); border-right: 1px solid #334155; display: flex; flex-direction: column; z-index: 1000; }
+        .sidebar-header { padding: 20px; border-bottom: 1px solid #334155; }
+        
+        /* 分頁切換 */
+        .tabs { display: flex; background: #0f172a; cursor: pointer; }
+        .tab { flex: 1; padding: 12px; text-align: center; color: var(--text-dim); transition: 0.3s; border-bottom: 2px solid transparent; font-size: 0.9rem; }
+        .tab.active { color: var(--text-main); border-bottom: 2px solid var(--accent-work); background: #1e293b; }
+
+        /* 工具欄 */
+        .toolbar { padding: 15px 20px; border-bottom: 1px solid #334155; }
+        .btn-group { display: flex; gap: 8px; margin-bottom: 10px; }
+        button { flex: 1; padding: 6px; background: #334155; border: none; color: white; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+        button:hover { background: #475569; }
+        
+        .sort-select { width: 100%; padding: 8px; background: #0f172a; color: white; border: 1px solid #475569; border-radius: 4px; margin-bottom: 10px; font-size: 0.85rem; }
+
+        .filter-section { flex: 1; overflow-y: auto; padding: 10px 20px; }
+        .search-input { width: 100%; padding: 10px; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: white; margin-bottom: 10px; box-sizing: border-box; }
+        
+        .check-item { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 0.85rem; cursor: pointer; }
+        .check-label { display: flex; align-items: center; flex: 1; }
+        .check-label input { margin-right: 10px; }
+        .count-tag { font-size: 0.7rem; color: var(--text-dim); background: #0f172a; padding: 2px 6px; border-radius: 10px; margin-left: 8px; }
+
+        #mynetwork { flex: 1; height: 100vh; }
+        div.vis-tooltip { background: #334155 !important; color: white !important; border: none !important; border-radius: 5px !important; padding: 10px !important; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <div class="sidebar-header">
+            <h2 style="margin:0 0 5px 0; font-size:1.1rem;">音樂劇數據中心</h2>
+            <div style="font-size: 0.75rem; color: var(--text-dim);">模式：<span id="currentModeDisplay">以劇目為主</span></div>
+        </div>
+
+        <div class="tabs">
+            <div class="tab active" id="tab-work" onclick="switchTab('work')">劇目清單</div>
+            <div class="tab" id="tab-person" onclick="switchTab('person')">人物清單</div>
+        </div>
+
+        <div class="toolbar">
+            <select id="sortOrder" class="sort-select" onchange="renderList()">
+                <option value="name">依名稱排序 (A-Z)</option>
+                <option value="countDesc">依關聯數量 (多 → 少)</option>
+                <option value="countAsc">依關聯數量 (少 → 多)</option>
+            </select>
+            <div class="btn-group">
+                <button onclick="selectAll(true)">全選顯示</button>
+                <button onclick="selectAll(false)">取消全選</button>
+            </div>
+            <input type="text" id="searchInput" class="search-input" placeholder="搜尋關鍵字...">
+        </div>
+        
+        <div id="filterList" class="filter-section"></div>
+    </div>
+
+    <div id="mynetwork"></div>
+
+    <script src="data.js"></script>
+    <script>
+        let network = null;
+        let nodeDataSet = new vis.DataSet();
+        let edgeDataSet = new vis.DataSet();
+        let currentTab = 'work';
+        
+        let selectedWorks = new Set();
+        let selectedPeople = new Set();
+        let nodeCounts = {}; // 儲存每個節點的關聯數
+
+        function init() {
+            // 1. 計算關聯數
+            graphData.nodes.forEach(n => {
+                const count = graphData.links.filter(l => l.source === n.id || l.target === n.id).length;
+                nodeCounts[n.id] = count;
+                // 初始化全選
+                if(n.type === 'work') selectedWorks.add(n.id);
+                else selectedPeople.add(n.id);
+            });
+
+            // 2. 初始化 Vis
+            nodeDataSet.add(graphData.nodes.map(n => ({
+                id: n.id,
+                label: n.id,
+                title: `${n.id} (關聯數: ${nodeCounts[n.id]})`,
+                shape: n.type === 'work' ? 'diamond' : 'dot',
+                color: { background: n.type === 'work' ? '#38bdf8' : '#4ade80', border: '#ffffff' },
+                font: { color: '#ffffff', size: 14 },
+                size: n.type === 'work' ? 25 : 15
+            })));
+
+            edgeDataSet.add(graphData.links.map(l => ({
+                from: l.source, to: l.target, label: l.role,
+                font: { size: 10, color: '#ffffff', strokeWidth: 0 },
+                color: { color: '#475569' },
+                arrows: 'to'
+            })));
+
+            const container = document.getElementById('mynetwork');
+            network = new vis.Network(container, { nodes: nodeDataSet, edges: edgeDataSet }, {
+                physics: { solver: 'forceAtlas2Based', forceAtlas2Based: { gravitationalConstant: -100, springLength: 150 } },
+                interaction: { hover: true, tooltipDelay: 100 }
+            });
+
+            renderList();
+            updateVisibility();
+        }
+
+        function switchTab(type) {
+            currentTab = type;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(`tab-${type}`).classList.add('active');
+            document.getElementById('currentModeDisplay').innerText = type === 'work' ? '以劇目為主' : '以人物為主';
+            renderList();
+        }
+
+        function renderList() {
+            const container = document.getElementById('filterList');
+            container.innerHTML = '';
+            const term = document.getElementById('searchInput').value.toLowerCase();
+            const sortVal = document.getElementById('sortOrder').value;
+            
+            // 過濾
+            let list = graphData.nodes.filter(n => n.type === currentTab && n.id.toLowerCase().includes(term));
+
+            // 排序
+            list.sort((a, b) => {
+                if (sortVal === 'countDesc') return nodeCounts[b.id] - nodeCounts[a.id];
+                if (sortVal === 'countAsc') return nodeCounts[a.id] - nodeCounts[b.id];
+                return a.id.localeCompare(b.id, 'zh-Hant');
+            });
+
+            list.forEach(node => {
+                const isChecked = currentTab === 'work' ? selectedWorks.has(node.id) : selectedPeople.has(node.id);
+                const item = document.createElement('div');
+                item.className = 'check-item';
+                item.innerHTML = `
+                    <label class="check-label">
+                        <input type="checkbox" ${isChecked ? 'checked' : ''}>
+                        <span>${node.id}</span>
+                    </label>
+                    <span class="count-tag">${nodeCounts[node.id]}</span>
+                `;
+                
+                item.querySelector('input').addEventListener('change', (e) => {
+                    if (currentTab === 'work') {
+                        e.target.checked ? selectedWorks.add(node.id) : selectedWorks.delete(node.id);
+                    } else {
+                        e.target.checked ? selectedPeople.add(node.id) : selectedPeople.delete(node.id);
+                    }
+                    updateVisibility();
+                });
+                container.appendChild(item);
+            });
+        }
+
+        function updateVisibility() {
+            const nodesToUpdate = [];
+            graphData.nodes.forEach(node => {
+                let isVisible = false;
+                if (currentTab === 'work') {
+                    if (node.type === 'work') isVisible = selectedWorks.has(node.id);
+                    else {
+                        const relatedWorks = graphData.links.filter(l => l.target === node.id).map(l => l.source);
+                        isVisible = relatedWorks.some(w => selectedWorks.has(w));
+                    }
+                } else {
+                    if (node.type === 'person') isVisible = selectedPeople.has(node.id);
+                    else {
+                        const relatedPeople = graphData.links.filter(l => l.source === node.id).map(l => l.target);
+                        isVisible = relatedPeople.some(p => selectedPeople.has(p));
+                    }
+                }
+                nodesToUpdate.push({ id: node.id, hidden: !isVisible });
+            });
+            nodeDataSet.update(nodesToUpdate);
+        }
+
+        function selectAll(bool) {
+            const term = document.getElementById('searchInput').value.toLowerCase();
+            const visibleNodes = graphData.nodes.filter(n => n.type === currentTab && n.id.toLowerCase().includes(term));
+            
+            visibleNodes.forEach(n => {
+                if (currentTab === 'work') bool ? selectedWorks.add(n.id) : selectedWorks.delete(n.id);
+                else bool ? selectedPeople.add(n.id) : selectedPeople.delete(n.id);
+            });
+            renderList();
+            updateVisibility();
+        }
+
+        document.getElementById('searchInput').addEventListener('input', renderList);
+        window.onload = init;
+    </script>
+</body>
+</html>
